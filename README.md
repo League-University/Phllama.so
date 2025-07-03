@@ -89,7 +89,7 @@ echo $response;
 
 ## Architecture
 
-- **ollama.cpp**: Model download, management, and tokenization
+- **ollama**: Model download, management, and tokenization
 - **llama.cpp**: Fast inference engine
 - **PHP-CPP**: PHP extension framework
 
@@ -97,7 +97,7 @@ echo $response;
 
 This is a basic implementation. For production use, you'll need to:
 
-1. Integrate actual ollama.cpp and llama.cpp libraries
+1. Integrate actual ollama and llama.cpp libraries
 2. Implement proper model loading and inference
 3. Add comprehensive error handling
 4. Optimize memory usage and performance
