@@ -1,6 +1,6 @@
 # Phllama.so - PHP Extension for Llama Models
 
-A PHP extension that combines ollama.cpp for model management and llama.cpp for fast inference.
+A PHP extension that combines ollama for model management and llama.cpp for fast inference.
 
 ## Features
 
@@ -33,7 +33,7 @@ cd PHP-CPP
 make && sudo make install
 
 # Install ollama
-curl -fsSL https://ollama.ai/install.sh | sh
+curl -fsSL https://ollama.com/install.sh | sh
 ```
 
 ### Build the Extension
