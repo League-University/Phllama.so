@@ -180,21 +180,19 @@ std::string LlamaInterface::generate(const std::string& prompt, int max_tokens) 
     // Clear the KV cache
     llama_kv_self_clear(context->ctx);
     
-    // Process the prompt in optimal batches
-    const size_t optimal_batch_size = 256; // Smaller batches for better memory usage
-    for (size_t i = 0; i < tokens.size(); i += optimal_batch_size) {
-        size_t batch_size = std::min(optimal_batch_size, tokens.size() - i);
-        if (llama_decode(context->ctx, llama_batch_get_one(&tokens[i], batch_size))) {
-            throw std::runtime_error("Failed to decode prompt");
-        }
+    // Process the prompt tokens
+    if (llama_decode(context->ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
+        throw std::runtime_error("Failed to decode prompt");
     }
     
-    // Generate response
+    // Generate response with safer sampling parameters
     std::string response;
     llama_sampler* sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(top_k));
-    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(top_p, 1));
-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(temperature));
+    
+    // Use more conservative sampling to avoid assertion errors
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(std::max(0.1f, temperature)));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(std::max(1, std::min(top_k, 50))));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(std::max(0.1f, std::min(top_p, 0.95f)), 1));
     
     for (int i = 0; i < max_tokens; i++) {
         llama_token new_token = llama_sampler_sample(sampler, context->ctx, -1);
