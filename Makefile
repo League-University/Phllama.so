@@ -23,7 +23,7 @@ PHPCPP_LIB          =   $(PHPCPP_DIR)/libphpcpp.a.2.4.10
 COMPILER_FLAGS      =   -Wall -c -O2 -std=c++17 -fpic -o
 COMPILER_FLAGS_PROD =   -Wall -c -O3 -std=c++17 -fpic -DNDEBUG -march=native -o
 LINKER_FLAGS        =   -shared
-LINKER_DEPENDENCIES =   $(PHPCPP_LIB) -lstdc++fs $(GGML_BASE_LIB) $(GGML_CPU_LIB) $(GGML_CUDA_LIB) -pthread -ldl
+LINKER_DEPENDENCIES =   $(PHPCPP_LIB) libllama.a -lstdc++fs -Lbuild/ollama/lib/ollama -lggml-base -lggml-cpu-haswell -lggml-cuda -pthread -ldl
 
 RM                  =   rm -f
 CP                  =   cp -f
