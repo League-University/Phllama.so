@@ -1,3 +1,6 @@
+# Ignore Claude directory
+.claude/
+
 # Prerequisites
 *.d
 
@@ -40,5 +43,20 @@
 # debug information files
 *.dwo
 
-# dependencies
-deps/*
+# Build directories
+build/
+deps/*/build/
+
+# CMake artifacts
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# Build artifacts
+deps/*/*.a
+deps/*/*.so
+deps/*/*.dylib
+deps/*/*.dll
+
+# But keep the submodule directories themselves
+!deps/ollama/

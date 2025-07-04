@@ -26,6 +26,7 @@ public:
     void setTemperature(float temperature);
     void setTopP(float top_p);
     void setTopK(int top_k);
+    void clearCache(); // Clear KV cache for memory management
 };
 
 #endif

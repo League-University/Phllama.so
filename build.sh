@@ -2,7 +2,7 @@
 
 set -e
 
-echo "Building Phllama.so PHP Extension..."
+echo "Building Phllama.so PHP Extension with Ollama's llama.cpp..."
 
 # Check dependencies
 echo "Checking dependencies..."
@@ -26,21 +26,31 @@ fi
 echo "Initializing git submodules..."
 git submodule update --init --recursive
 
-# Build llama.cpp
-echo "Building llama.cpp..."
-cd deps/llama.cpp
-mkdir -p build
-cd build
-cmake .. -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
-make -j$(nproc)
-cd ../../..
+# Check PHP-CPP submodule
+echo "Checking PHP-CPP submodule..."
+if [ ! -d "deps/php-cpp" ]; then
+    echo "Error: PHP-CPP submodule not found. Run 'git submodule update --init --recursive'"
+    exit 1
+fi
 
-# Build the PHP extension
-echo "Building PHP extension..."
+if [ ! -f "deps/php-cpp/CMakeLists.txt" ]; then
+    echo "Error: PHP-CPP submodule appears incomplete. Try 'git submodule update --init --recursive'"
+    exit 1
+fi
+
+# Build the PHP extension (now includes ollama's llama.cpp)
+echo "Building PHP extension with ollama's llama.cpp..."
 make clean
 make
 
 echo "Build completed successfully!"
+echo ""
+echo "Architecture: Self-contained build with local dependencies"
+echo "- Using ollama's patched llama.cpp for enhanced stability"
+echo "- PHP-CPP built locally from submodule (no system dependency)"
+echo "- Memory management fixes"
+echo "- Enhanced CUDA operations" 
+echo "- Production-tested patches"
 echo ""
 echo "To install:"
 echo "  sudo make install"

@@ -5,13 +5,25 @@ EXTENSION_DIR       =   $(shell php-config --extension-dir)
 COMPILER            =   g++
 LINKER              =   g++
 
-LLAMA_DIR           =   deps/llama.cpp
-LLAMA_LIB           =   $(LLAMA_DIR)/build/src/libllama.a
-LLAMA_COMMON_LIB    =   $(LLAMA_DIR)/build/common/libcommon.a
+# Ollama's llama.cpp paths
+OLLAMA_LLAMA_DIR    =   deps/ollama/llama/llama.cpp
+OLLAMA_GGML_DIR     =   deps/ollama/ml/backend/ggml/ggml
+OLLAMA_BUILD_DIR    =   build/ollama
+
+# PHP-CPP paths
+PHPCPP_DIR          =   deps/php-cpp
+PHPCPP_BUILD_DIR    =   build/php-cpp
+
+# Build output libraries
+GGML_BASE_LIB       =   $(OLLAMA_BUILD_DIR)/lib/ollama/libggml-base.so
+GGML_CPU_LIB        =   $(OLLAMA_BUILD_DIR)/lib/ollama/libggml-cpu-haswell.so
+GGML_CUDA_LIB       =   $(OLLAMA_BUILD_DIR)/lib/ollama/libggml-cuda.so
+PHPCPP_LIB          =   $(PHPCPP_DIR)/libphpcpp.a.2.4.10
 
 COMPILER_FLAGS      =   -Wall -c -O2 -std=c++17 -fpic -o
+COMPILER_FLAGS_PROD =   -Wall -c -O3 -std=c++17 -fpic -DNDEBUG -march=native -o
 LINKER_FLAGS        =   -shared
-LINKER_DEPENDENCIES =   -lphpcpp -lstdc++fs $(LLAMA_LIB) $(LLAMA_COMMON_LIB) -pthread
+LINKER_DEPENDENCIES =   $(PHPCPP_LIB) -lstdc++fs $(GGML_BASE_LIB) $(GGML_CPU_LIB) $(GGML_CUDA_LIB) -pthread -ldl
 
 RM                  =   rm -f
 CP                  =   cp -f
@@ -21,14 +33,27 @@ SOURCES             =   main.cpp ollama_interface.cpp llama_interface.cpp
 OBJECTS             =   $(SOURCES:%.cpp=%.o)
 PHP_CONFIG          =   php-config
 PHP_CONFIG_DIRECTIVES = --includes --libs --ldflags
-INCLUDES            =   $(shell $(PHP_CONFIG) --includes) -I$(LLAMA_DIR)/include -I$(LLAMA_DIR)/common
+INCLUDES            =   $(shell $(PHP_CONFIG) --includes) -I$(OLLAMA_LLAMA_DIR)/include -I$(OLLAMA_LLAMA_DIR)/common -I$(OLLAMA_GGML_DIR)/include -Ideps/ollama/llama -I$(PHPCPP_DIR) -I$(PHPCPP_DIR)/include
 
-all: llama-deps $(NAME).so
+all: ollama-deps php-cpp-deps $(NAME).so
 
-llama-deps:
-	cd $(LLAMA_DIR) && mkdir -p build && cd build && cmake .. && make -j$(shell nproc)
+# Production build with optimizations
+production: clean-tests ollama-deps php-cpp-deps $(NAME)-prod.so
 
-$(NAME).so: ${OBJECTS} llama-deps
+$(NAME)-prod.so: ${OBJECTS:.o=-prod.o} ollama-deps php-cpp-deps
+	${LINKER} ${LINKER_FLAGS} -o $(NAME).so ${OBJECTS:.o=-prod.o} ${LINKER_DEPENDENCIES}
+
+%-prod.o: %.cpp
+	${COMPILER} ${COMPILER_FLAGS_PROD} $@ ${INCLUDES} $<
+
+ollama-deps:
+	$(MKDIR) $(OLLAMA_BUILD_DIR)
+	cd $(OLLAMA_BUILD_DIR) && cmake ../../deps/ollama && make -j$(shell nproc)
+
+php-cpp-deps:
+	cd $(PHPCPP_DIR) && make -j$(shell nproc)
+
+$(NAME).so: ${OBJECTS} ollama-deps php-cpp-deps
 	${LINKER} ${LINKER_FLAGS} -o $@ ${OBJECTS} ${LINKER_DEPENDENCIES}
 
 %.o: %.cpp
@@ -41,4 +66,12 @@ install: $(NAME).so
 clean:
 	${RM} *.o $(NAME).so
 
-.PHONY: clean install
+# Remove test files for production builds
+clean-tests:
+	${RM} test_*.php
+
+clean-all: clean clean-tests
+	${RM} -rf $(OLLAMA_BUILD_DIR)
+	cd $(PHPCPP_DIR) && make clean
+
+.PHONY: clean clean-all clean-tests install ollama-deps php-cpp-deps production

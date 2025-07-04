@@ -1,3 +1,6 @@
-[submodule "deps/llama.cpp"]
-	path = deps/llama.cpp
-	url = https://github.com/ggml-org/llama.cpp.git
+[submodule "deps/ollama"]
+	path = deps/ollama
+	url = https://github.com/ollama/ollama.git
+[submodule "deps/php-cpp"]
+	path = deps/php-cpp
+	url = https://github.com/CopernicaMarketingSoftware/PHP-CPP.git
