@@ -43,8 +43,8 @@ public:
      */
     void __construct(Php::Parameters &params)
     {
-        if (params.size() != 1) {
-            throw Php::Exception("Phllama constructor requires exactly one parameter: model identifier");
+        if (params.size() < 1 || params.size() > 2) {
+            throw Php::Exception("Phllama constructor requires 1-2 parameters: model identifier [, hardware_config]");
         }
         
         model_identifier = static_cast<std::string>(params[0]);
@@ -220,45 +220,6 @@ public:
         return info;
     }
     
-    /**
-     * Set custom ollama models directory
-     * 
-     * @param directory Path to ollama models directory
-     */
-    static void setOllamaModelsDir(Php::Parameters &params)
-    {
-        if (params.size() != 1) {
-            throw Php::Exception("setOllamaModelsDir requires exactly one parameter: directory path");
-        }
-        
-        std::string directory = static_cast<std::string>(params[0]);
-        
-        // Security: Validate directory path
-        if (directory.empty()) {
-            throw Php::Exception("Directory path cannot be empty");
-        }
-        
-        if (directory.length() > 512) {
-            throw Php::Exception("Directory path too long (max 512 characters)");
-        }
-        
-        // Security: Basic path validation
-        if (directory.find("..") != std::string::npos) {
-            throw Php::Exception("Directory traversal not allowed");
-        }
-        
-        OllamaInterface::setModelsDirectory(directory);
-    }
-    
-    /**
-     * Get current ollama models directory
-     * 
-     * @return Current models directory path
-     */
-    static Php::Value getOllamaModelsDir()
-    {
-        return OllamaInterface::getModelsDirectory();
-    }
 
 private:
     /**
@@ -325,6 +286,62 @@ private:
     }
 };
 
+/**
+ * Standalone configuration functions
+ */
+void phllama_set_models_dir(Php::Parameters &params) {
+    if (params.size() != 1) {
+        throw Php::Exception("Function requires exactly one parameter: directory path");
+    }
+    
+    std::string directory = static_cast<std::string>(params[0]);
+    
+    // Security: Validate directory path
+    if (directory.empty()) {
+        throw Php::Exception("Directory path cannot be empty");
+    }
+    
+    if (directory.length() > 512) {
+        throw Php::Exception("Directory path too long (max 512 characters)");
+    }
+    
+    // Security: Basic path validation
+    if (directory.find("..") != std::string::npos) {
+        throw Php::Exception("Directory traversal not allowed");
+    }
+    
+    OllamaInterface::setModelsDirectory(directory);
+}
+
+Php::Value phllama_get_models_dir() {
+    return OllamaInterface::getModelsDirectory();
+}
+
+Php::Value phllama_get_hardware_info() {
+    Php::Array info;
+    
+    int gpu_count = LlamaInterface::detectGPUCount();
+    info["gpu_count"] = gpu_count;
+    info["cpu_threads"] = LlamaInterface::getOptimalCPUThreads();
+    
+    auto gpu_info = LlamaInterface::getGPUInfo();
+    Php::Array gpu_details;
+    for (size_t i = 0; i < gpu_info.size(); i++) {
+        gpu_details[i] = gpu_info[i];
+    }
+    info["gpu_details"] = gpu_details;
+    
+    // Get optimal configuration
+    HardwareConfig optimal = LlamaInterface::detectOptimalConfig();
+    Php::Array optimal_config;
+    optimal_config["gpu_mode"] = static_cast<int>(optimal.gpu_mode);
+    optimal_config["gpu_layers"] = optimal.gpu_layers;
+    optimal_config["cpu_threads"] = optimal.cpu_threads;
+    info["optimal_config"] = optimal_config;
+    
+    return info;
+}
+
 extern "C" {
     /**
      * PHP Extension Module Entry Point
@@ -360,12 +377,13 @@ extern "C" {
         // Utility methods
         phllama.method<&Phllama::getModelInfo>("getModelInfo");
         
-        // Static configuration methods
+        // Configuration constants and functions
         extension.add(Php::Constant("PHLLAMA_VERSION", "1.0.0-alpha"));
-        extension.add("Phllama_setOllamaModelsDir", &Phllama::setOllamaModelsDir, {
+        extension.add("phllama_set_models_dir", phllama_set_models_dir, {
             Php::ByVal("directory", Php::Type::String)
         });
-        extension.add("Phllama_getOllamaModelsDir", &Phllama::getOllamaModelsDir);
+        extension.add("phllama_get_models_dir", phllama_get_models_dir);
+        extension.add("phllama_get_hardware_info", phllama_get_hardware_info);
         
         extension.add(std::move(phllama));
         

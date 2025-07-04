@@ -6,6 +6,9 @@
 #include <filesystem>
 #include <thread>
 #include <algorithm>
+#include <sstream>
+#include <fstream>
+#include <chrono>
 
 // Use ollama's enhanced llama.cpp headers
 #include "llama.h"
@@ -60,7 +63,12 @@ LlamaInterface::~LlamaInterface() {
  * Uses ollama's enhanced model loading with stability patches
  */
 bool LlamaInterface::loadModel(const std::string& path) {
+    return loadModel(path, hardware_config);
+}
+
+bool LlamaInterface::loadModel(const std::string& path, const HardwareConfig& config) {
     model_path = path;
+    hardware_config = config;
     
     // Validate file exists and is readable
     if (!std::filesystem::exists(path)) {
@@ -72,12 +80,36 @@ bool LlamaInterface::loadModel(const std::string& path) {
     }
     
     try {
-        // Set up model parameters with ollama's optimizations
+        // Set up model parameters based on hardware configuration
         llama_model_params model_params = llama_model_default_params();
-        model_params.n_gpu_layers = 0; // CPU only for alpha release
-        model_params.use_mmap = true;  // Use memory mapping for efficiency
-        model_params.use_mlock = false; // Don't lock memory for now
-        model_params.vocab_only = false; // Load full model
+        
+        // Configure GPU usage based on detected/configured mode
+        HardwareConfig effective_config = (config.gpu_mode == GPUMode::AUTO) ? 
+            detectOptimalConfig() : config;
+            
+        switch (effective_config.gpu_mode) {
+            case GPUMode::CPU_ONLY:
+                model_params.n_gpu_layers = 0;
+                break;
+            case GPUMode::SINGLE_GPU:
+                model_params.n_gpu_layers = (effective_config.gpu_layers == -1) ? 999 : effective_config.gpu_layers;
+                model_params.main_gpu = effective_config.main_gpu;
+                break;
+            case GPUMode::DUAL_GPU:
+                model_params.n_gpu_layers = (effective_config.gpu_layers == -1) ? 999 : effective_config.gpu_layers;
+                model_params.main_gpu = 0; // Use GPU 0 as primary
+                // Note: tensor_split configuration would go here but current llama.cpp version
+                // may have different API. For dual GPU, ollama handles this automatically.
+                break;
+            default:
+                model_params.n_gpu_layers = 0; // Fallback to CPU
+        }
+        
+        model_params.use_mmap = effective_config.use_mmap;
+        model_params.use_mlock = effective_config.use_mlock;
+        model_params.vocab_only = false;
+        
+        hardware_config = effective_config; // Store the effective config
         
         // Load the model using ollama's enhanced loader
         model->model = llama_model_load_from_file(path.c_str(), model_params);
@@ -85,12 +117,23 @@ bool LlamaInterface::loadModel(const std::string& path) {
             return false;
         }
         
-        // Set up context parameters optimized for typical usage
+        // Set up context parameters optimized for this hardware
         llama_context_params ctx_params = llama_context_default_params();
         ctx_params.n_ctx = 2048;      // Context window size
         ctx_params.n_batch = 512;     // Batch size for processing
-        // Use optimal thread count: half of available cores, min 1, max 8
-        int optimal_threads = std::max(1, std::min(8, static_cast<int>(std::thread::hardware_concurrency()) / 2));
+        
+        // Configure threads based on GPU mode and available hardware
+        int optimal_threads;
+        if (effective_config.cpu_threads != -1) {
+            optimal_threads = effective_config.cpu_threads;
+        } else {
+            optimal_threads = getOptimalCPUThreads();
+            // Adjust for GPU usage - use fewer CPU threads when GPUs are active
+            if (effective_config.gpu_mode != GPUMode::CPU_ONLY) {
+                optimal_threads = std::max(1, optimal_threads / 2);
+            }
+        }
+        
         ctx_params.n_threads = optimal_threads;
         ctx_params.n_threads_batch = optimal_threads;
         ctx_params.type_k = GGML_TYPE_F16; // Use F16 for KV cache to save memory
@@ -194,4 +237,145 @@ void LlamaInterface::clearCache() {
     if (context && context->ctx) {
         llama_kv_self_clear(context->ctx);
     }
+}
+
+void LlamaInterface::setHardwareConfig(const HardwareConfig& config) {
+    hardware_config = config;
+}
+
+HardwareConfig LlamaInterface::getHardwareConfig() const {
+    return hardware_config;
+}
+
+int LlamaInterface::detectGPUCount() {
+    // Try to get GPU count from nvidia-smi
+    FILE* pipe = popen("nvidia-smi --query-gpu=count --format=csv,noheader,nounits 2>/dev/null | wc -l", "r");
+    if (pipe) {
+        char buffer[32];
+        if (fgets(buffer, sizeof(buffer), pipe)) {
+            int count = std::atoi(buffer);
+            pclose(pipe);
+            return count;
+        }
+        pclose(pipe);
+    }
+    
+    // Fallback: try to detect via /proc
+    std::ifstream nvidia_smi("/proc/driver/nvidia/gpus");
+    if (!nvidia_smi.is_open()) {
+        return 0; // No NVIDIA driver or GPUs
+    }
+    
+    int gpu_count = 0;
+    std::string line;
+    while (std::getline(nvidia_smi, line)) {
+        if (line.find("GPU-") != std::string::npos) {
+            gpu_count++;
+        }
+    }
+    
+    return gpu_count;
+}
+
+std::vector<std::string> LlamaInterface::getGPUInfo() {
+    std::vector<std::string> gpu_info;
+    
+    // Try to get GPU info from nvidia-ml-py or nvidia-smi
+    FILE* pipe = popen("nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null", "r");
+    if (pipe) {
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            std::string line(buffer);
+            if (!line.empty() && line.back() == '\n') {
+                line.pop_back();
+            }
+            if (!line.empty()) {
+                gpu_info.push_back(line);
+            }
+        }
+        pclose(pipe);
+    }
+    
+    return gpu_info;
+}
+
+int LlamaInterface::getOptimalCPUThreads() {
+    int total_cores = std::thread::hardware_concurrency();
+    
+    // For dual Xeon setup, we want to use most cores but leave some for system
+    if (total_cores >= 16) {
+        return total_cores - 2; // Leave 2 cores for system
+    } else if (total_cores >= 8) {
+        return total_cores - 1; // Leave 1 core for system
+    } else {
+        return std::max(1, total_cores / 2);
+    }
+}
+
+HardwareConfig LlamaInterface::detectOptimalConfig() {
+    HardwareConfig config;
+    
+    int gpu_count = detectGPUCount();
+    
+    if (gpu_count >= 2) {
+        config.gpu_mode = GPUMode::DUAL_GPU;
+        config.gpu_layers = 999; // Use all layers on GPU
+        config.tensor_split_enabled = true;
+        config.tensor_split = {0.5f, 0.5f}; // 50/50 split
+    } else if (gpu_count == 1) {
+        config.gpu_mode = GPUMode::SINGLE_GPU;
+        config.gpu_layers = 999; // Use all layers on GPU
+        config.main_gpu = 0;
+    } else {
+        config.gpu_mode = GPUMode::CPU_ONLY;
+        config.gpu_layers = 0;
+    }
+    
+    config.cpu_threads = getOptimalCPUThreads();
+    config.use_mmap = true;
+    config.use_mlock = false; // Don't lock memory by default
+    
+    return config;
+}
+
+LlamaInterface::PerformanceStats LlamaInterface::getPerformanceStats() const {
+    PerformanceStats stats;
+    
+    // Get GPU count and memory usage
+    stats.active_gpus = detectGPUCount();
+    
+    // Get VRAM usage if GPUs are available
+    if (stats.active_gpus > 0) {
+        FILE* pipe = popen("nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits 2>/dev/null", "r");
+        if (pipe) {
+            char buffer[64];
+            if (fgets(buffer, sizeof(buffer), pipe)) {
+                stats.vram_usage_mb = std::stoul(buffer);
+            }
+            pclose(pipe);
+        }
+    }
+    
+    // Get system memory usage
+    std::ifstream meminfo("/proc/meminfo");
+    if (meminfo.is_open()) {
+        std::string line;
+        size_t mem_total = 0, mem_available = 0;
+        while (std::getline(meminfo, line)) {
+            if (line.substr(0, 9) == "MemTotal:") {
+                std::istringstream iss(line);
+                std::string label, unit;
+                iss >> label >> mem_total >> unit;
+            } else if (line.substr(0, 12) == "MemAvailable:") {
+                std::istringstream iss(line);
+                std::string label, unit;
+                iss >> label >> mem_available >> unit;
+            }
+        }
+        if (mem_total > 0) {
+            stats.memory_usage_mb = (mem_total - mem_available) / 1024;
+        }
+    }
+    
+    return stats;
 }
